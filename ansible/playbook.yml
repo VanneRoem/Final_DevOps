@@ -1,0 +1,130 @@
+- name: Deploy Laravel Application
+  hosts: all
+  remote_user: root
+  gather_facts: yes
+
+  vars:
+    project_root: /var/www/html/production
+    repo_url: 'https://github.com/VanneRoem/Final_DevOps.git'
+    repo_branch: 'Final_DevOps'
+
+  tasks:
+    - name: Ping the host
+      ansible.builtin.ping:
+
+    - name: Ensure production directory exists
+      ansible.builtin.file:
+        path: "{{ project_root }}"
+        state: directory
+        mode: '0755'
+        owner: www-data
+        group: www-data
+      become: yes
+
+    - name: Remove staging directory if exists
+      ansible.builtin.file:
+        path: /var/www/html/staging
+        state: absent
+      become: yes
+
+    - name: Ensure git is installed
+      ansible.builtin.apt:
+        name: git
+        state: present
+        update_cache: yes
+      become: yes
+
+    - name: Ensure composer is installed
+      ansible.builtin.apt:
+        name: composer
+        state: present
+      become: yes
+
+    - name: Ensure Node.js is installed
+      ansible.builtin.apt:
+        name: nodejs
+        state: present
+      become: yes
+
+    - name: Ensure npm is installed
+      ansible.builtin.apt:
+        name: npm
+        state: present
+      become: yes
+
+    # <=== NEW TASK: remove existing project directory before cloning ===>
+    - name: Remove existing project directory if any
+      ansible.builtin.file:
+        path: "{{ project_root }}"
+        state: absent
+      become: yes
+
+    - name: Clone Laravel repository
+      ansible.builtin.git:
+        repo: "{{ repo_url }}"
+        dest: "{{ project_root }}"
+        version: "{{ repo_branch }}"
+        force: yes
+        update: yes
+      become: yes
+      # do NOT use become_user here to avoid shell issues
+
+    - name: Check if .env.example exists
+      ansible.builtin.stat:
+        path: "{{ project_root }}/.env.example"
+      register: env_example
+
+    - name: Copy .env.example to .env if .env does not exist
+      ansible.builtin.copy:
+        src: "{{ project_root }}/.env.example"
+        dest: "{{ project_root }}/.env"
+        remote_src: yes
+        owner: www-data
+        group: www-data
+        mode: '0644'
+      when: env_example.stat.exists
+      become: yes
+
+    - name: Ensure production.sqlite exists
+      ansible.builtin.file:
+        path: "{{ project_root }}/production.sqlite"
+        state: touch
+        owner: www-data
+        group: www-data
+        mode: '0644'
+      become: yes
+
+    - name: Install PHP dependencies (Composer)
+      ansible.builtin.command: composer install --no-dev --optimize-autoloader
+      args:
+        chdir: "{{ project_root }}"
+      become: yes
+
+    - name: Install Node.js dependencies (npm)
+      ansible.builtin.command: npm install
+      args:
+        chdir: "{{ project_root }}"
+      become: yes
+
+    - name: Build frontend assets
+      ansible.builtin.command: npm run build
+      args:
+        chdir: "{{ project_root }}"
+      become: yes
+
+    - name: Generate application key
+      ansible.builtin.command: php artisan key:generate
+      args:
+        chdir: "{{ project_root }}"
+      become: yes
+
+    - name: Run database migrations
+      ansible.builtin.command: php artisan migrate --force
+      args:
+        chdir: "{{ project_root }}"
+      become: yes
+
+    - name: Ensure correct ownership of production directory except node_modules
+      ansible.builtin.shell: |
+        find {{ project_root }} -not -path "{{ project_root }}/node_modules/*" -exec chown www-data:www-data {} +
+      become: yes

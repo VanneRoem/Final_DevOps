@@ -1,0 +1,51 @@
+- name: Laravel Web Server CI/CD Tasks
+  hosts: localhost
+  gather_facts: no
+  collections:
+    - community.kubernetes
+  vars:
+    pod_name: "{{ lookup('pipe', \"kubectl get pods -n laravel-app -l app=laravel-app-single-pod -o jsonpath='{.items[0].metadata.name}'\") }}"
+    container_name: web-server
+    namespace: laravel-app
+    app_dir: /var/www
+
+  tasks:
+    - name: Ensure no local changes and pull latest code (skip if not a git repo)
+      community.kubernetes.k8s_exec:
+        namespace: "{{ namespace }}"
+        pod: "{{ pod_name }}"
+        container: "{{ container_name }}"
+        command: |
+          bash -c "cd {{ app_dir }} && if [ -d .git ]; then git diff --quiet && git pull; else echo 'Not a git repo, skipping pull.'; fi"
+
+    - name: Install composer dependencies
+      community.kubernetes.k8s_exec:
+        namespace: "{{ namespace }}"
+        pod: "{{ pod_name }}"
+        container: "{{ container_name }}"
+        command: |
+          bash -c "cd {{ app_dir }} && composer install --no-interaction --prefer-dist"
+
+    - name: Install npm dependencies and build
+      community.kubernetes.k8s_exec:
+        namespace: "{{ namespace }}"
+        pod: "{{ pod_name }}"
+        container: "{{ container_name }}"
+        command: |
+          bash -c "cd {{ app_dir }} && npm install && npm run build"
+
+    - name: Run Laravel tests with SQLite
+      community.kubernetes.k8s_exec:
+        namespace: "{{ namespace }}"
+        pod: "{{ pod_name }}"
+        container: "{{ container_name }}"
+        command: |
+          bash -c "cd {{ app_dir }} && php artisan config:cache && php artisan test --env=testing"
+
+    - name: Backup MySQL database
+      community.kubernetes.k8s_exec:
+        namespace: "{{ namespace }}"
+        pod: "{{ pod_name }}"
+        container: mysql-db
+        command: |
+          bash -c "mysqldump -u root -pHello@123 Vanne-db > /var/www/backup_$(date +%F_%T).sql"
